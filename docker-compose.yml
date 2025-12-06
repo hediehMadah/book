@@ -1,0 +1,432 @@
+#version: "3.9"
+services:
+  ###################################################
+  # mssql-server
+  ###################################################
+  MCAC-MSSQL:
+    image: docker.mca.com/mcac-mssql:v1.0.0
+    profiles: ["mssql"]
+      #build:
+      #context: ./MSSQL
+      #dockerfile: Dockerfile
+    container_name: MCAC-MSSQL2.0
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Mc@c42393"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+      - mssql_log:/var/opt/mssql/log
+      - mssql_backup:/var/opt/mssql/backup
+      - sql-audit:/var/opt/mssql/audit
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4g"
+        reservations:
+          cpus: "1.0"
+          memory: "2g"
+    networks:
+      - infra-net
+  ###################################################
+  # rabbitmq
+  ###################################################
+  rabbitmq:
+    image: docker.mca.com/mcac-rabbitmq:v1.0.0
+    profiles: ["rabbitmq"]
+    container_name: MCAC-RABBITMQ2.0
+    restart: always
+    build:
+      context: ./RabbitMQ
+      dockerfile: Dockerfile
+      args:
+        RABBITMQ_DEFAULT_USER: root
+        RABBITMQ_DEFAULT_PASS: Aa123456
+        RABBITMQ_DEFAULT_VHOST: mcac-vhost
+    environment:
+      RABBITMQ_DEFAULT_USER: root
+      RABBITMQ_DEFAULT_PASS: Aa123456
+      RABBITMQ_DEFAULT_VHOST: mcac-vhost
+    ports:
+      - "5672:5672" # --> # Instance RabbitMQ
+      - "15672:15672" # UI Management Panel
+    volumes:
+      - mcac_rabbitmq_data:/var/lib/rabbitmq
+      - mcac_rabbitmq_log:/var/log/rabbitmq
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: "0.50"
+    networks:
+      - infra-net
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  ###################################################
+  # vault
+  ###################################################
+  vault:
+    image: mcac-vault:v1.0.0
+    profiles: ["vault"]
+    container_name: vault-server2.0
+    environment:
+      - TZ=Asia/Tehran
+    build:
+      context: ./Vault
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK # Prevents memory swapping
+    volumes:
+      - /opt/mcac-shared:/mcac-shared # Temp Memory Path For Files
+      - /vault/keys:/vault/keys
+    networks:
+      - infra-net
+  ###################################################
+  # ca-server
+  ###################################################
+  MCAC-CA:
+    image: docker.mca.com/mcac-ca:v1.0.0
+    container_name: MCAC-CA2.0
+    build:
+      context: ./ELK/ca-server
+      dockerfile: Dockerfile
+    profiles: ["elastic"]
+    volumes:
+      - certs-volume:/ca/requests
+      - root-ca:/ca/certs/
+    networks:
+      - infra-net
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /ca/certs/ca.crt"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  ###################################################
+  # elasticsearch
+  ###################################################
+  ELASTICSEARCH:
+    image: docker.mca.com/mcac-elastic:v1.0.0
+    container_name: ELASTICSEARCH2.0
+    build:
+      context: ./ELK/elastic
+      dockerfile: Dockerfile
+      args:
+        ES_VERSION: "8.17.3"
+    profiles: ["elastic"]
+    environment:
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=Aa123456
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.transport.ssl.enabled=true
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=85%
+      - cluster.routing.allocation.disk.watermark.high=90%
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+      - certs-volume:/shared-certs
+      - root-ca:/root-certs
+    networks:
+      - infra-net
+    depends_on:
+      MCAC-CA:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2"
+        reservations:
+          memory: 2G
+          cpus: "1"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -k --max-time 5 https://localhost:9200 -o /dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+  ###################################################
+  # kibana
+  ###################################################
+  KIBANA:
+    image: docker.mca.com/mcac-kibana:v1.0.0
+    container_name: KIBANA2.0
+    build:
+      context: ./ELK/kibana
+      dockerfile: Dockerfile
+      args:
+        KIBANA_VERSION: "8.17.3"
+    profiles: ["elastic"]
+    environment:
+      - NODE_OPTIONS=--openssl-legacy-provider=false
+      - monitoring.ui.container.elasticsearch.enabled=true
+    volumes:
+      - certs-volume:/shared-certs
+      - root-ca:/root-certs
+    ports:
+      - "5601:5601"
+    networks:
+      - infra-net
+    depends_on:
+      ELASTICSEARCH:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -s --cacert /root-certs/ca.crt https://localhost:5601/api/status | grep -q ''"level":"available"''',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  ###################################################
+  # logstash
+  ###################################################
+  LOGSTASH:
+    image: docker.mca.com/mcac-logstash:v1.0.0
+    container_name: LOGSTASH2.0
+    build:
+      context: ./ELK/logstash
+      dockerfile: Dockerfile
+      args:
+        LOGSTASH_VERSION: "8.17.3"
+    profiles: ["logstash"]
+    environment:
+      - "LS_JAVA_OPTS=-Xms1g -Xmx1g"
+      - PIPELINE_WORKERS=2
+      - PIPELINE_BATCH_SIZE=125
+      - PIPELINE_BATCH_DELAY=50
+      - XPACK_MONITORING_ENABLED=true
+      - LOG_LEVEL=info
+      - ELASTIC_USERNAME=elastic
+      - ELASTIC_PASSWORD=Aa123456
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+    volumes:
+      - certs-volume:/shared-certs
+      - root-ca:/root-certs
+    networks:
+      - infra-net
+    depends_on:
+      ELASTICSEARCH:
+        condition: service_healthy
+      KIBANA:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -s localhost:9600/_node/stats | grep -q ''"status":"green"''',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  ###################################################
+  # filebeat
+  ###################################################
+  FILEBEAT:
+    image: docker.mca.com/mcac-filebeat:v1.0.0
+    container_name: FILEBEAT2.0
+    build:
+      context: ./ELK/filebeat
+      dockerfile: Dockerfile
+      args:
+        FILEBEAT_VERSION: "8.17.3"
+    profiles: ["beats"]
+    volumes:
+      - ./ELK/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - sql-audit:/sql-audit:ro
+      - certs-volume:/shared-certs
+      - root-ca:/root-certs
+      - filebeat-data:/var/lib/filebeat
+    environment:
+      - ELASTIC_USERNAME=elastic
+      - ELASTIC_PASSWORD=Aa123456
+    networks:
+      - infra-net
+    depends_on:
+      LOGSTASH:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "filebeat test config && filebeat test output"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+  ###################################################
+  # auditbeat
+  ###################################################
+  AUDITBEAT:
+    image: docker.mca.com/mcac-auditbeat:v1.0.0
+    container_name: AUDITBEAT2.0
+    build:
+      context: ./ELK/auditbeat
+      dockerfile: Dockerfile
+      args:
+        AUDITBEAT_VERSION: "8.17.3"
+    profiles: ["beats"]
+    user: root # Required for file monitoring capabilities
+    volumes:
+      - ./ELK/auditbeat/auditbeat.yml:/usr/share/auditbeat/auditbeat.yml:ro
+      - ./watchtower:/watchtower:ro
+      - certs-volume:/shared-certs
+      - root-ca:/root-certs
+      - /var/log/auditbeat:/var/log/auditbeat
+      - auditbeat-data:/var/lib/auditbeat
+    cap_add:
+      - AUDIT_CONTROL
+      - AUDIT_READ
+      - DAC_READ_SEARCH # For reading files across containers
+    environment:
+      - ELASTIC_USERNAME=elastic
+      - ELASTIC_PASSWORD=123456789
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_PORT=9200
+      - ELASTICSEARCH_PROTOCOL=https
+      - LOG_TYPE=system_audit
+      - ENVIRONMENT=production
+      - MONITORING_TYPE=security
+    networks:
+      - infra-net
+    depends_on:
+      LOGSTASH:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.2"
+    healthcheck:
+      test: ["CMD-SHELL", "auditbeat test config && auditbeat test output"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+  ###################################################
+  # metricbeat
+  ###################################################
+  METRICBEAT:
+    image: docker.mca.com/mcac-metricbeat:v1.0.0
+    container_name: METRICBEAT2.0
+    build:
+      context: ./ELK/metricbeat
+      dockerfile: Dockerfile
+      args:
+        - METRICBEAT_VERSION=8.17.3
+    profiles: ["beats"]
+    user: root # Required for docker module
+    volumes:
+      - ./ELK/metricbeat/metricbeat.yml:/usr/share/metricbeat/metricbeat.yml:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /proc:/hostfs/proc:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs-volume:/shared-certs
+      - root-ca:/root-certs
+      - metricbeat-data:/var/lib/metricbeat
+    environment:
+      - LOG_TYPE=container_metrics
+      - ENVIRONMENT=production
+      - MONITORING_TYPE=infrastructure
+      - SERVICE=docker
+    networks:
+      - infra-net
+    depends_on:
+      LOGSTASH:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "metricbeat test config && metricbeat test output"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+volumes:
+  mcac_rabbitmq_log:
+  mcac_rabbitmq_data:
+  prometheus_data:
+  mssql_data:
+  mssql_log:
+  mssql_backup:
+  certs-volume:
+  root-ca:
+  sql-audit:
+  esdata:
+  filebeat-data:
+  metricbeat-data:
+  auditbeat-data:
+networks:
+  infra-net:
+    name: infra-net
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.32.0.0/24
+          gateway: 172.32.0.1
