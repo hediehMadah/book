@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  runner:
+    image: <repository>/act_runner:latest
+    environment:
+      CONFIG_FILE: /config.yaml
+      GITEA_INSTANCE_URL: "<Your-repo-url>"
+      GITEA_RUNNER_REGISTRATION_TOKEN: "<Your-Token>"
+      GITEA_RUNNER_NAME: "runner"
+      GITEA_RUNNER_LABELS: "ubuntu-latest,ubuntu-22.04,ubuntu-20.04,iran,runner-iran"
+
+    extra_hosts:
+      - "repo-url:<Repo-Ip-Public>"
+      - "your-registery:<Registery-Public-IP>"
+    volumes:
+      - ./config.yaml:/config.yaml
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
