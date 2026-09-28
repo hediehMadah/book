@@ -1,0 +1,45 @@
+log:
+  level: info
+
+runner:
+  file: .runner
+  capacity: 4
+  envs:
+    A_TEST_ENV_NAME_1: a_test_env_value_1
+    A_TEST_ENV_NAME_2: a_test_env_value_2
+  env_file: .env
+  timeout: 3h
+  shutdown_timeout: 0s
+  insecure: false
+  fetch_timeout: 5s
+  fetch_interval: 2s
+  github_mirror: ''
+  labels:
+    - "runner-iran:docker://<Your-repo-url>/runner-images:ubuntu-latest"
+    - "runner2:docker://<Your-repo-url>/runner-images:ubuntu-latest"
+    - "runner-foreign:docker://<Your-repo-url>/runner-images:ubuntu-latest"
+    - "ubuntu-latest:docker://<Your-repo-url>/runner-images:ubuntu-latest"
+    - "ubuntu-22.04:docker://<Your-repo-url>/runner-images:ubuntu-22.04"
+
+
+cache:
+  enabled: true
+  dir: ""
+  host: ""
+  port: 0
+  external_server: ""
+
+container:
+  docker_host: unix:///var/run/docker.sock
+  network: ""
+  privileged: false
+  options:
+  workdir_parent:
+  valid_volumes: []
+  force_pull: true
+  force_rebuild: false
+  require_docker: false
+  docker_timeout: 0s
+
+host:
+  workdir_parent:
